@@ -23,6 +23,25 @@ def test_column_detection_with_real_looking_names():
     assert pd.api.types.is_datetime64_any_dtype(out["timestamp"])
 
 
+def test_greenhouse1_format_separate_date_and_time():
+    """Exact layout of Greenhouse-1.xlsx: one sheet per sensor, Date (datetime) + Time (datetime.time)."""
+    import datetime as dt
+    raw = pd.DataFrame({
+        "Date": pd.to_datetime(["2020-04-17", "2020-04-17", "2020-04-17"]),
+        "Time": [dt.time(6, 40, 51), dt.time(6, 46, 2), np.nan],        # rows are not sorted, some times empty
+        "Onboard Temperature": [17.5, 17.6, 17.7],
+        "Onboard Humidity": [80.1, 80.0, 79.9],
+        "RSSI": [-113, -114, -112],
+        "SNR": [-6.2, -5.0, -7.1],
+    })
+    out, used = D.standardize_columns(raw, AUTO, sheet_name="AF16")
+    assert used["timestamp"] == ["Date", "Time"]
+    assert used["temperature"] == "Onboard Temperature" and used["humidity"] == "Onboard Humidity"
+    assert out["timestamp"].iloc[0] == pd.Timestamp("2020-04-17 06:40:51")
+    assert pd.isna(out["timestamp"].iloc[2])
+    assert (out["sensor_id"] == "AF16").all()
+
+
 def test_sheet_name_used_as_sensor_id():
     raw = pd.DataFrame({"timestamp": ["2020-04-20 10:00"], "temp": [20.0], "hum": [70.0]})
     out, _ = D.standardize_columns(raw, AUTO, sheet_name="AF22")

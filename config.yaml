@@ -21,20 +21,25 @@ paths:
 # 1. DATA LAYER
 # -----------------------------------------------------------------------------
 data:
-  # Column mapping. "auto" = detect from the column names (temp, hum, rssi, snr, time, sensor...).
-  # 01_prepare_data.py prints what it detected. If it is wrong, write the exact column name.
-  # timestamp can also be a list of two columns, e.g. ["Date", "Time"].
-  # If the file has one sheet per sensor and no sensor column, the sheet name becomes the sensor id.
+  # Column mapping, set for Greenhouse-1.xlsx (Zenodo 5793685):
+  #   one sheet per sensor (AF16 ... AF42) -> the sheet name is the sensor id
+  #   columns: Date | Time | Onboard Temperature | Onboard Humidity | RSSI | SNR
+  # For another file, use "auto" (detection by name) or write the exact column names.
+  # timestamp can be one column or a [date_column, time_column] pair.
   columns:
-    timestamp: auto
+    timestamp: [Date, Time]
     sensor_id: auto
-    temperature: auto
-    humidity: auto
-    rssi: auto
-    snr: auto
+    temperature: Onboard Temperature
+    humidity: Onboard Humidity
+    rssi: RSSI
+    snr: SNR
 
-  start_after: "2020-04-17 06:38:00"   # sensors were moved into the greenhouse at this time (Zenodo notice)
-  end_before: null
+  # Study window = the period when all 27 sensors were in the greenhouse:
+  #   start: sensors brought into the greenhouse on 17 April 2020 06:38 (Zenodo notice)
+  #   end:   sensors removed on 3 July 2020 between 06:00 and 08:00 (RSSI jumps from -115 to -75 dBm
+  #          as they are carried to the gateway; afterwards only a few sensors keep sending, from elsewhere)
+  start_after: "2020-04-17 06:38:00"
+  end_before: "2020-07-03 06:00:00"
 
   variables: [temperature, humidity]   # measured quantities we protect
   network_variables: [rssi, snr]       # radio metadata, used as context features if present
@@ -43,10 +48,12 @@ data:
     temperature: [-10, 60]
     humidity: [0, 100]
 
-  hampel:                              # removes real spikes from the raw data BEFORE simulation,
-    window: 7                          # so that the "normal" reference really is normal
-    n_sigmas: 5
-    min_abs: {temperature: 1.0, humidity: 3.0}
+  hampel:                              # removes real glitches from the raw data BEFORE simulation,
+    window: 7                          # so that the "normal" reference really is normal.
+    n_sigmas: 5                        # A point is removed only if it is > 5 MADs AND > min_abs away
+    min_abs: {temperature: 3.0, humidity: 10.0}   # from the median of the 35 min around it.
+                                       # (Greenhouse humidity naturally jumps 3-8 %RH between messages:
+                                       #  lower thresholds would delete real behaviour.)
 
   resample_freq: auto                  # "auto" = median message interval, snapped to 1/2/5/10/15/30/60 min
   max_interp_steps: 2                  # fill gaps of at most N steps; longer gaps stay missing
@@ -75,8 +82,11 @@ attacks:
   # intensity: in units of the sensor's standard deviation (spike, random, drift, offset)
   #            or in days back (replay)
   # variables: one = a single measured variable is attacked, all = the whole message
+  # count_factor: multiplies events_per_scenario (spikes are 1-2 points long, so they need more
+  #               events for the outlier class to have enough points to be measured)
   scenarios:
-    spike:     {category: outlier,       duration: [5min, 10min], intensity: [3.0, 6.0], variables: one}
+    spike:     {category: outlier,       duration: [5min, 10min], intensity: [3.0, 6.0], variables: one,
+                count_factor: 5}
     random:    {category: fault,         duration: [30min, 3h],   intensity: [2.0, 4.0], variables: one}
     stuck:     {category: fault,         duration: [2h, 12h],     intensity: null,       variables: one}
     drift:     {category: fault,         duration: [6h, 24h],     intensity: [0.5, 2.0], variables: one}

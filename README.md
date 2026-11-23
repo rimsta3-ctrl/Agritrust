@@ -4,7 +4,10 @@ Tutored project (projet tutoré). The aim is to detect anomalous or falsified me
 sensors **and to say what kind of anomaly each one is**: outlier, sensor fault or falsification.
 
 * Dataset: LoRaWAN greenhouse monitoring datasets, [Zenodo 5793685](https://zenodo.org/records/5793685),
-  file `Greenhouse-1.xlsx` (27 sensors, temperature, humidity, RSSI, SNR, April to August 2020).
+  file `Greenhouse-1.xlsx` (32.1 MB, MD5 `4bf157516b3b576abe30550c65ce75d9`): one sheet per sensor (AF16 to AF42),
+  columns `Date | Time | Onboard Temperature | Onboard Humidity | RSSI | SNR`, 668,368 messages.
+  Study window: **17 April 2020 06:38 to 3 July 2020 06:00**, the period when all 27 sensors were in the
+  greenhouse (see `reports/data_audit.md`).
 * Full design: **[ARCHITECTURE.md](ARCHITECTURE.md)**. Read it first; you can reuse it in the report.
 
 ```
@@ -19,11 +22,11 @@ raw data → 1 DATA → 2 SIMULATION → 3 FEATURES → 4 MODELS (stage 1 detect
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 1) without the dataset: synthetic greenhouse data, to check that everything runs (about 3 min)
-python scripts/run_all.py --synthetic
-
-# 2) with the real data: put Greenhouse-1.xlsx in data/raw/, then
+# real data: data/raw/Greenhouse-1.xlsx (about 4 min; the first read of the .xlsx takes about 1 min)
 python scripts/run_all.py
+
+# without the dataset: synthetic greenhouse data, only to check the code
+python scripts/run_all.py --synthetic
 
 # dashboard
 streamlit run app/streamlit_app.py
@@ -44,18 +47,12 @@ You can also run the stages one by one, which is useful when you change only one
 
 `reports/results_summary.md` holds the tables ready to paste into the report.
 
-### First run on the real file: check the column mapping
+### The dataset file
 
-The column names of `Greenhouse-1.xlsx` are detected automatically (temp, hum, rssi, snr, time, sensor…).
-`01_prepare_data.py` prints the mapping it found:
-
-```
-Column mapping detected (first sheet): {'temperature': 'Temperature', 'humidity': ..., 'timestamp': ..., 'sensor_id': ...}
-```
-
-If a column is wrong, write its exact name in `config.yaml > data > columns`. If the file has one sheet per
-sensor, the sheet name is used as the sensor id. A date and a time in two separate columns are given as
-`timestamp: ["Date", "Time"]`. Then open `reports/data_audit.md` and check the median message interval.
+`data/` is excluded from Git, so the dataset is not pushed to GitHub. If `data/raw/Greenhouse-1.xlsx` is
+missing (for example after a fresh `git clone`), download it from Zenodo into `data/raw/`. The column mapping
+for this file is already set in `config.yaml > data > columns`. For another file, set the columns back to `auto`
+or write the exact names.
 
 ### On Kaggle
 
@@ -98,23 +95,31 @@ agri-iot-anomaly/
 
 ---
 
-## What to expect
+## Results on the real data (reference run, seed 42, test split 17 June to 3 July 2020)
 
-Results on **synthetic** data are only a check that the code works, not results for the report. In a reference
-run (20 synthetic sensors, 60 days):
+Full tables: `reports/results_summary.md`. Figures: `reports/figures/`.
 
-* supervised XGBoost gets the best F1 (~0.69), and the dense autoencoder is the best unsupervised detector (~0.60);
-* spikes, random values, stuck sensors and drift are detected almost always;
-* **injection** (fabricated but plausible values) is the hardest case for unsupervised models. That is the
-  result to analyse in the report;
-* the end-to-end 4-class macro F1 is around 0.5. Separating faults from falsifications is the open challenge
-  of the project.
+| Stage-1 detector  | Type         | Precision | Recall | F1   | PR-AUC | False-positive rate |
+|-------------------|--------------|-----------|--------|------|--------|---------------------|
+| Random Forest     | supervised   | 0.84      | 0.77   | 0.81 | 0.85   | 0.9 %               |
+| XGBoost           | supervised   | 0.81      | 0.79   | 0.80 | 0.85   | 1.2 %               |
+| z-score baseline  | rule         | 0.66      | 0.52   | 0.58 | 0.62   | 1.7 %               |
+| Autoencoder       | unsupervised | 0.55      | 0.55   | 0.55 | 0.46   | 2.7 %               |
+| One-Class SVM     | unsupervised | 0.51      | 0.59   | 0.55 | 0.51   | 3.5 %               |
+| Isolation Forest  | unsupervised | 0.26      | 0.59   | 0.36 | 0.32   | 10.5 %              |
 
----
+* Almost every event is caught by at least one alert (event recall 0.83 to 1.0 for all ML models). The point-level
+  scores are lower, because the first and last steps of an event are hard to separate from normal data.
+* Stage 2 (type of anomaly) reaches about 81 % accuracy on the true anomalies (macro F1 0.81 to 0.83).
+* End to end, on 4 classes (normal / outlier / fault / falsification): macro F1 0.77 with XGBoost in stage 1, and
+  0.67 with the best unsupervised detector. Telling faults from falsifications is the hardest part.
+* Points to discuss in the report: the simple z-score rule is as good as the unsupervised ML models here, and
+  the scores move by about ±0.05 when the attacks are placed differently (`project.seed`). Report a mean over a
+  few seeds.
 
 ## Suggested next steps
 
-1. Run on the real `Greenhouse-1.xlsx`, check the mapping and the audit, and write the data chapter.
+1. Read `reports/data_audit.md` (study window, network outages, cleaning) and write the data chapter.
 2. Validate the scenario-to-category table (ARCHITECTURE.md §4.2) with your supervisor.
 3. Tune: feature windows, scenario intensities, model parameters, threshold strategy (`f1` or `fpr`).
 4. Turn on the LSTM autoencoder (`config.yaml > models > stage1 > lstm_autoencoder > enabled: true`).

@@ -2,8 +2,9 @@
 
 **Subject:** AI-based detection of anomalous and falsified IoT sensor data for smart agriculture
 **Dataset:** LoRaWAN greenhouse monitoring datasets, Zenodo record 5793685 (University of Antwerp, IDLab), file
-`Greenhouse-1.xlsx`: 27 sensors (AF16 to AF42), tomato greenhouse in Belgium, April to August 2020, with
-timestamp, temperature, humidity, RSSI and SNR, about one message every 5 minutes.
+`Greenhouse-1.xlsx`: 27 sensors (AF16 to AF42), tomato greenhouse in Belgium. It has one sheet per sensor with the
+columns `Date | Time | Onboard Temperature | Onboard Humidity | RSSI | SNR`, one message about every 5.2 minutes,
+and 668,368 messages from 10 April to 23 November 2020. Study window: 17 April 06:38 to 3 July 06:00 (§4.1).
 
 ---
 
@@ -112,6 +113,19 @@ dashboard call the same functions, so nothing is duplicated.
 Why clean real spikes **before** simulating: the "normal" reference must really be normal. Otherwise a real
 anomaly would be labelled normal and every metric would be biased.
 
+**What the real data looks like (study window)**
+
+| Fact | Value | Consequence |
+|------|-------|-------------|
+| Sensors brought into the greenhouse | 17 April 2020 06:38 (Zenodo notice) | earlier data dropped (42,383 messages) |
+| Sensors removed | 3 July 2020 between 06:00 and 08:00: RSSI rises from −115 to −75 dBm as they are carried to the gateway | later data dropped (183,386 messages). After that only some sensors keep sending, from another place (RSSI −80 to −65 dBm, room-like temperature) |
+| Messages kept | 442,586 (27 sensors, about 77 days) | |
+| Interval | median 5.2 min, 3.5 % of messages lost one by one | 5-minute grid; single lost messages are interpolated |
+| Network outages (no sensor sending) | 8 periods, 212 h in total (e.g. 20–25 May, 2–4 June) | stay missing; 17.5 % of the grid is empty |
+| Glitches | 1 impossible temperature (−45 °C), 59 temperature and 87 humidity isolated spikes | removed before the simulation |
+| Natural noise | humidity jumps 3–8 %RH between messages when vents or misting run | the spike filter only removes deviations above 3 °C or 10 %RH, so real behaviour is kept |
+| Split (60/20/20) | train until 2 June 11:00, validation until 17 June 20:30, test until 3 July | 359k / 120k / 117k grid rows |
+
 ### 4.2 Simulation layer (`attacks.py`)
 
 | Scenario   | Category      | What is done to the values                                         | Duration    | Intensity            |
@@ -124,7 +138,9 @@ anomaly would be labelled normal and every metric would be biased.
 | injection  | falsification | fabricated plausible values: the sensor's usual daily profile plus noise, with a smooth start | 3–12 h | – |
 | replay     | falsification | real values from the same time of day, d days earlier, re-sent      | 3–12 h      | d = 1–7 days         |
 
-σ = standard deviation of that sensor and variable. `injection` and `replay` replace the whole message
+σ = standard deviation of that sensor and variable. Each split gets 12 events per scenario (25 for train), and
+5 times more spikes (`count_factor`), because a spike lasts only 1–2 points and the outlier class would otherwise
+have too few points to measure. `injection` and `replay` replace the whole message
 (temperature and humidity together); the others modify one variable. Events never overlap and are spaced by at
 least 3 h. Train, validation and test receive different random events (different seeds). Each event is logged
 in `attack_log.csv` (sensor, variables, scenario, category, start, end, number of points, intensity, parameters).
@@ -233,12 +249,18 @@ models; nothing is retrained.
   attack. Say so in the report; it is the honest limit of any simulation-based study.
 * Rolling windows keep the memory of an event for a while, so some alerts fall just after an event ends. They
   count as false positives at point level. Event-level recall and detection delay give the complementary view.
-* The `outlier` class has very few points (a spike lasts 1–2 steps), so its F1 is unstable. Inject more spike
-  events (`attacks.events_per_scenario`, or a per-scenario count) if you need a reliable number for it.
+* Results depend on where the simulated events fall: with another `project.seed`, F1 moves by about ±0.05.
+  Report the mean and spread over a few seeds.
+* On this dataset the z-score rule (F1 0.58) is as good as the unsupervised ML detectors (0.55). The sensors
+  agree closely with each other, so cross-sensor deviations are already very informative. Only the supervised
+  models clearly do better (0.80).
 * Unsupervised detectors are weakest on `injection` (plausible values). This is expected, and it is the
   interesting result to discuss: cross-sensor features are what catch it.
-* **Weather extension**: add the outdoor temperature and solar radiation for Hoogstraten (Belgium) from a
-  historical weather API (for example Open-Meteo), resampled to the same grid, as extra context features.
+* **Weather extension**: add the outdoor temperature and solar radiation for Hoogstraten (Belgium, where the
+  greenhouse is) from a historical weather API (for example Open-Meteo), resampled to the same grid, as extra
+  context features.
+* **Relocation / spoofing evidence**: the real removal of the sensors on 3 July shows up as a 40 dB RSSI jump,
+  which shows that radio metadata can reveal a node that is no longer where it should be.
 * **Spoofing extension**: add a scenario that also shifts RSSI and SNR (a fake node transmits from somewhere
   else). The `rssi_dev` and `snr_dev` features are already there.
 * **Live stream extension**: replay the test split through MQTT (Mosquitto + paho-mqtt) into the dashboard.

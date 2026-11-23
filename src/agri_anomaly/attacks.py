@@ -142,9 +142,10 @@ class AttackSimulator:
         sensors = list(self.slices)
         for scenario, spec in self.scenarios.items():
             dmin, dmax = (to_steps(d, self.freq) for d in spec["duration"])
+            target = int(round(n_per_scenario * spec.get("count_factor", 1)))
             done = 0
-            for _ in range(n_per_scenario * 200):
-                if done >= n_per_scenario:
+            for _ in range(target * 200):
+                if done >= target:
                     break
                 sid = sensors[self.rng.integers(len(sensors))]
                 n = int(self.rng.integers(dmin, dmax + 1))
@@ -160,8 +161,8 @@ class AttackSimulator:
                     continue
                 self._apply(split, sid, scenario, r, n, vars_, intensity)
                 done += 1
-            if done < n_per_scenario:
-                log.warning("[%s] only %d/%d '%s' events could be placed", split, done, n_per_scenario, scenario)
+            if done < target:
+                log.warning("[%s] only %d/%d '%s' events could be placed", split, done, target, scenario)
         return self._frame(), self.events_frame()
 
     def inject_one(self, df: pd.DataFrame, sensor_id: str, scenario: str, start: pd.Timestamp,

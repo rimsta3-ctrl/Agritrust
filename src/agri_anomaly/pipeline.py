@@ -49,7 +49,14 @@ def prepare_data(cfg: dict, synthetic: bool = False) -> dict:
         raw = D.load_raw(resolve_path(cfg, "raw_file"), dc["columns"], cache=proc / "raw_cache.parquet")
         source = str(resolve_path(cfg, "raw_file").name)
 
-    summary, per_sensor = D.audit(raw, dc)
+    summary_full, _ = D.audit(raw, dc)
+    win = raw.dropna(subset=["timestamp"])
+    if dc.get("start_after"):
+        win = win[win["timestamp"] >= pd.Timestamp(dc["start_after"])]
+    if dc.get("end_before"):
+        win = win[win["timestamp"] < pd.Timestamp(dc["end_before"])]
+    summary_win, per_sensor = D.audit(win, dc)
+    outages = D.network_outages(win)
     cleaned, stats = D.clean(raw, dc)
     freq = D.infer_frequency(cleaned) if dc["resample_freq"] == "auto" else dc["resample_freq"]
     net = [c for c in dc.get("network_variables", []) if raw[c].notna().mean() > 0.5]
@@ -69,7 +76,10 @@ def prepare_data(cfg: dict, synthetic: bool = False) -> dict:
         json.dump(meta, f, indent=2, default=str)
 
     per_sensor.to_csv(rep / "data_audit_sensors.csv", index=False)
-    (rep / "data_audit.md").write_text(D.audit_markdown(summary, per_sensor, stats), encoding="utf-8")
+    label = f"({dc.get('start_after') or 'start'} -> {dc.get('end_before') or 'end'})"
+    (rep / "data_audit.md").write_text(
+        D.audit_markdown(summary_full, summary_win, per_sensor, stats, outages, label), encoding="utf-8")
+    outages.to_csv(rep / "network_outages.csv", index=False)
     log.info("Data ready: freq=%s, sensors=%d, rows=%s, cuts=%s", freq, len(meta["sensors"]), meta["rows"], cuts)
     return meta
 
@@ -230,7 +240,9 @@ def evaluate_models(cfg: dict) -> dict:
     e2e = pd.DataFrame(e2e_rows)
     e2e.to_csv(rep / "results_end_to_end.csv", index=False)
 
-    # ---- example timelines with the best unsupervised detector
+    # ---- example timelines with the best unsupervised detector (old ones removed first)
+    for old in fig.glob("timeline_*.png"):
+        old.unlink()
     n1 = pick_stage1(s1, "best_unsupervised")
     ev = te[te["event_id"] >= 0].drop_duplicates("event_id")
     top = ev["sensor_id"].value_counts().index[: cfg["evaluation"]["timeline_examples"]]

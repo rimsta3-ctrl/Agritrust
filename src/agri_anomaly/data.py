@@ -61,6 +61,20 @@ def _parse_time(s: pd.Series) -> pd.Series:
     return out
 
 
+def _time_of_day(s: pd.Series) -> pd.Series:
+    """Time-of-day column (datetime.time, '14:11:51', Excel day fraction or full datetime) -> Timedelta."""
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s - s.dt.normalize()
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_timedelta(s, unit="D", errors="coerce")
+    return pd.to_timedelta(s.astype(str).str.strip(), errors="coerce")
+
+
+def _combine_date_time(date: pd.Series, time: pd.Series) -> pd.Series:
+    """Separate Date and Time columns (as in Greenhouse-1.xlsx) -> one timestamp."""
+    return _parse_time(date).dt.normalize() + _time_of_day(time)
+
+
 def _to_numeric(s: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(s):
         return s.astype(float)
@@ -75,7 +89,12 @@ def standardize_columns(raw: pd.DataFrame, mapping: dict, sheet_name: str | None
         spec = mapping.get(key, "auto")
         if spec in (None, "none", "null"):
             continue
-        if spec == "auto":
+        if spec == "auto" and key == "timestamp":
+            # a separate "Date" and "Time" pair wins over a single "Time" column
+            low = {str(c).strip().lower(): c for c in raw.columns if c not in used}
+            col = [low["date"], low["time"]] if "date" in low and "time" in low else \
+                _detect_column(raw.columns, key, used)
+        elif spec == "auto":
             col = _detect_column(raw.columns, key, used)
         elif isinstance(spec, list):
             missing = [c for c in spec if c not in raw.columns]
@@ -96,7 +115,9 @@ def standardize_columns(raw: pd.DataFrame, mapping: dict, sheet_name: str | None
     out = pd.DataFrame(index=raw.index)
     ts_col = found["timestamp"]
     if isinstance(ts_col, list):
-        out["timestamp"] = _parse_time(raw[ts_col].astype(str).agg(" ".join, axis=1))
+        if len(ts_col) != 2:
+            raise SchemaError("timestamp as a list must be exactly [date_column, time_column]")
+        out["timestamp"] = _combine_date_time(raw[ts_col[0]], raw[ts_col[1]])
     else:
         out["timestamp"] = _parse_time(raw[ts_col])
 
@@ -200,14 +221,31 @@ def audit(df: pd.DataFrame, cfg_data: dict) -> tuple[dict, pd.DataFrame]:
     return summary, per_sensor
 
 
-def audit_markdown(summary: dict, per_sensor: pd.DataFrame, cleaning: dict | None = None) -> str:
-    lines = ["# Data audit", ""]
-    for k in ("rows", "sensors", "start", "end", "unparsable_timestamps", "median_interval_min"):
-        lines.append(f"- **{k}**: {summary[k]}")
-    lines += ["", "## Variables", "", summary["describe"].to_markdown(), ""]
+def network_outages(df: pd.DataFrame, min_hours: int = 2) -> pd.DataFrame:
+    """Periods during which NO sensor sent anything (gateway / network down)."""
+    hourly = df.set_index("timestamp").resample("h")["sensor_id"].nunique()
+    dead = hourly[hourly == 0]
+    if dead.empty:
+        return pd.DataFrame(columns=["start", "end", "hours"])
+    block = (dead.index.to_series().diff() != pd.Timedelta("1h")).cumsum()
+    rows = [{"start": b.index[0], "end": b.index[-1] + pd.Timedelta("1h"), "hours": len(b)}
+            for _, b in dead.groupby(block) if len(b) >= min_hours]
+    return pd.DataFrame(rows)
+
+
+def audit_markdown(full: dict, window: dict, per_sensor: pd.DataFrame, cleaning: dict | None = None,
+                   outages: pd.DataFrame | None = None, window_label: str = "") -> str:
+    keys = ("rows", "sensors", "start", "end", "unparsable_timestamps", "median_interval_min")
+    lines = ["# Data audit", "", "## Whole file", ""] + [f"- **{k}**: {full[k]}" for k in keys]
+    lines += ["", full["describe"].to_markdown(), "",
+              f"## Study window {window_label}", ""] + [f"- **{k}**: {window[k]}" for k in keys]
+    lines += ["", window["describe"].to_markdown(), ""]
+    if outages is not None and len(outages):
+        lines += ["## Network-wide outages in the study window (no sensor sending)", "",
+                  outages.to_markdown(index=False), "", f"Total: {int(outages['hours'].sum())} h", ""]
     if cleaning:
         lines += ["## Cleaning", ""] + [f"- **{k}**: {v}" for k, v in cleaning.items()] + [""]
-    lines += ["## Per sensor", "", per_sensor.to_markdown(index=False), ""]
+    lines += ["## Per sensor (study window)", "", per_sensor.to_markdown(index=False), ""]
     return "\n".join(lines)
 
 

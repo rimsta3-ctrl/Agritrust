@@ -14,6 +14,8 @@ def attacked(cfg, grid):
 def test_every_scenario_is_injected_with_its_category(cfg, attacked):
     frame, events = attacked
     assert set(events["scenario"]) == set(cfg["attacks"]["scenarios"])
+    counts = events["scenario"].value_counts()
+    assert counts["spike"] == 3 * cfg["attacks"]["scenarios"]["spike"].get("count_factor", 1)
     for _, ev in events.iterrows():
         assert ev["category"] == cfg["attacks"]["scenarios"][ev["scenario"]]["category"]
 
