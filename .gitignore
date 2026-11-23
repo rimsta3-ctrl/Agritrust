@@ -1,0 +1,22 @@
+# data and generated artefacts (re-created by the pipeline); folder structure is kept with .gitkeep
+data/**
+models/**
+reports/**
+!data/**/
+!models/**/
+!reports/**/
+!**/.gitkeep
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# notebooks / editors
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store

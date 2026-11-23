@@ -1,0 +1,126 @@
+# =============================================================================
+#  AI-based detection of anomalous and falsified IoT sensor data (smart agriculture)
+#  Single source of truth for paths and parameters. Every script reads this file.
+# =============================================================================
+
+project:
+  name: agri-iot-anomaly
+  seed: 42
+
+paths:
+  # Zenodo record 5793685 (LoRaWAN greenhouse monitoring datasets, University of Antwerp).
+  # Put Greenhouse-1.xlsx (or a .csv / .parquet export of it) in data/raw/.
+  # On Kaggle, point this to /kaggle/input/<your-dataset>/Greenhouse-1.xlsx
+  raw_file: data/raw/Greenhouse-1.xlsx
+  processed: data/processed
+  features: data/features
+  models: models
+  reports: reports
+
+# -----------------------------------------------------------------------------
+# 1. DATA LAYER
+# -----------------------------------------------------------------------------
+data:
+  # Column mapping. "auto" = detect from the column names (temp, hum, rssi, snr, time, sensor...).
+  # 01_prepare_data.py prints what it detected. If it is wrong, write the exact column name.
+  # timestamp can also be a list of two columns, e.g. ["Date", "Time"].
+  # If the file has one sheet per sensor and no sensor column, the sheet name becomes the sensor id.
+  columns:
+    timestamp: auto
+    sensor_id: auto
+    temperature: auto
+    humidity: auto
+    rssi: auto
+    snr: auto
+
+  start_after: "2020-04-17 06:38:00"   # sensors were moved into the greenhouse at this time (Zenodo notice)
+  end_before: null
+
+  variables: [temperature, humidity]   # measured quantities we protect
+  network_variables: [rssi, snr]       # radio metadata, used as context features if present
+
+  physical_range:                      # values outside are impossible -> treated as missing
+    temperature: [-10, 60]
+    humidity: [0, 100]
+
+  hampel:                              # removes real spikes from the raw data BEFORE simulation,
+    window: 7                          # so that the "normal" reference really is normal
+    n_sigmas: 5
+    min_abs: {temperature: 1.0, humidity: 3.0}
+
+  resample_freq: auto                  # "auto" = median message interval, snapped to 1/2/5/10/15/30/60 min
+  max_interp_steps: 2                  # fill gaps of at most N steps; longer gaps stay missing
+  min_sensor_coverage: 0.5             # drop sensors present on less than 50 % of the time grid
+
+  split:                               # chronological split (no shuffling of time series)
+    train: 0.6
+    val: 0.2
+    test: 0.2
+
+synthetic:                             # used with --synthetic: lets you run everything without the dataset
+  n_sensors: 20
+  days: 60
+  freq: 5min
+  start: "2020-04-17 06:40:00"
+
+# -----------------------------------------------------------------------------
+# 2. SIMULATION LAYER  (scenarios required by the project sheet + "spike" for the outlier class)
+# -----------------------------------------------------------------------------
+attacks:
+  events_per_scenario: {train: 25, val: 12, test: 12}
+  min_gap: 3h                          # minimum spacing between two events on the same sensor
+
+  # category : outlier | fault | falsification
+  # duration : [min, max] as a time span (converted to steps with the resampling frequency)
+  # intensity: in units of the sensor's standard deviation (spike, random, drift, offset)
+  #            or in days back (replay)
+  # variables: one = a single measured variable is attacked, all = the whole message
+  scenarios:
+    spike:     {category: outlier,       duration: [5min, 10min], intensity: [3.0, 6.0], variables: one}
+    random:    {category: fault,         duration: [30min, 3h],   intensity: [2.0, 4.0], variables: one}
+    stuck:     {category: fault,         duration: [2h, 12h],     intensity: null,       variables: one}
+    drift:     {category: fault,         duration: [6h, 24h],     intensity: [0.5, 2.0], variables: one}
+    offset:    {category: falsification, duration: [1h, 6h],      intensity: [0.3, 1.2], variables: one}
+    injection: {category: falsification, duration: [3h, 12h],     intensity: null,       variables: all}
+    replay:    {category: falsification, duration: [3h, 12h],     intensity: [1, 7],     variables: all}
+
+# -----------------------------------------------------------------------------
+# 3. FEATURE LAYER  (all windows look at the past only)
+# -----------------------------------------------------------------------------
+features:
+  short_window: 30min
+  long_window: 3h
+  corr_window: 2h
+
+# -----------------------------------------------------------------------------
+# 4. MODEL LAYER
+# -----------------------------------------------------------------------------
+models:
+  stage1:                              # detection: normal vs suspect
+    zscore_baseline:  {enabled: true}
+    isolation_forest: {enabled: true, n_estimators: 200, max_samples: 512}
+    one_class_svm:    {enabled: true, nu: 0.02, gamma: scale, max_train_samples: 8000}
+    autoencoder:      {enabled: true, hidden: [32, 8], epochs: 30, batch_size: 512, lr: 0.001,
+                       patience: 4, max_train_samples: 300000}
+    lstm_autoencoder: {enabled: false, window: 24, hidden: 32, epochs: 10, batch_size: 256, lr: 0.001,
+                       max_train_samples: 40000}    # optional (slower): set enabled: true
+    random_forest:    {enabled: true, n_estimators: 200, min_samples_leaf: 2, max_samples: 0.3,
+                       max_train_samples: 300000}   # max_samples = share of rows per tree (speed)
+    xgboost:          {enabled: true, n_estimators: 400, max_depth: 6, learning_rate: 0.05,
+                       max_train_samples: 300000}
+
+  stage2:                              # qualification: outlier vs fault vs falsification
+    rf_classifier:  {enabled: true, n_estimators: 300, min_samples_leaf: 1}
+    xgb_classifier: {enabled: true, n_estimators: 400, max_depth: 6, learning_rate: 0.05}
+
+  threshold:
+    strategy: f1                       # f1 = maximise F1 on validation ; fpr = reach target_fpr on validation
+    target_fpr: 0.01
+
+# -----------------------------------------------------------------------------
+# 5. EVALUATION LAYER
+# -----------------------------------------------------------------------------
+evaluation:
+  # stage-1 detectors placed in front of stage 2 for the end-to-end (4-class) evaluation
+  end_to_end_stage1: [best_unsupervised, best_overall]
+  timeline_examples: 3                 # number of example plots (one per attacked sensor)
