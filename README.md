@@ -69,7 +69,6 @@ or write the exact names.
 
 ```
 agri-iot-anomaly/
-├── ARCHITECTURE.md          full design (layers, scenarios, features, models, evaluation protocol)
 ├── config.yaml              every path and parameter (seed, scenarios, windows, models, threshold)
 ├── requirements.txt
 ├── src/agri_anomaly/
@@ -117,21 +116,3 @@ Full tables: `reports/results_summary.md`. Figures: `reports/figures/`.
   the scores move by about ±0.05 when the attacks are placed differently (`project.seed`). Report a mean over a
   few seeds.
 
-## Suggested next steps
-
-1. Read `reports/data_audit.md` (study window, network outages, cleaning) and write the data chapter.
-2. Validate the scenario-to-category table (ARCHITECTURE.md §4.2) with your supervisor.
-3. Tune: feature windows, scenario intensities, model parameters, threshold strategy (`f1` or `fpr`).
-4. Turn on the LSTM autoencoder (`config.yaml > models > stage1 > lstm_autoencoder > enabled: true`).
-5. Extensions: weather context, a spoofing scenario using RSSI, an MQTT live stream (ARCHITECTURE.md §7).
-
-### Splitting the work between two people
-
-| Person A                                         | Person B                                        |
-|--------------------------------------------------|-------------------------------------------------|
-| literature review: IoT architecture and attacks  | literature review: anomaly-detection methods    |
-| data layer and audit, attack scenarios           | features, models, tuning                        |
-| dashboard                                        | evaluation and figures                          |
-| shared: report, presentation, demo               |                                                 |
-
-Work on separate Git branches. Both of you use the same `config.yaml`, so the results stay comparable.
